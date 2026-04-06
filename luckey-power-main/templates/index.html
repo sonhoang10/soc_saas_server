@@ -1,0 +1,226 @@
+cat << 'EOF' > index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOC Active Defense Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
+</head>
+<body class="bg-gray-900 text-white p-6 font-sans min-h-screen">
+    <div class="max-w-7xl mx-auto">
+        <div class="flex items-center justify-between mb-6 border-b border-gray-700 pb-4">
+            <h1 class="text-3xl font-bold text-red-500 flex items-center">
+                <span class="text-4xl mr-3">🛡️</span> SOC Active Defense
+            </h1>
+            
+            <div class="flex items-center space-x-6">
+                <div class="flex items-center space-x-3 bg-gray-800 px-4 py-2 rounded-full border border-gray-700">
+                    <span class="text-gray-300 text-sm font-semibold">🤖 Tự động Ban:</span>
+                    <button id="autoban-toggle" onclick="toggleAutoBan()" class="w-12 h-6 rounded-full bg-gray-600 relative transition-colors duration-300 focus:outline-none shadow-inner">
+                        <span id="autoban-dot" class="w-4 h-4 bg-white rounded-full absolute top-1 left-1 transition-transform duration-300 transform shadow-md"></span>
+                    </button>
+                </div>
+
+                <div class="flex items-center space-x-2 bg-gray-800 px-4 py-2 rounded-full border border-gray-700">
+                    <span id="status-dot" class="w-3 h-3 rounded-full bg-red-500"></span>
+                    <span id="status-text" class="text-gray-300 text-sm">Chờ luồng Kafka...</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="col-span-2 space-y-4">
+                <h2 class="text-xl font-semibold text-gray-300 mb-2 border-b border-gray-700 pb-2">🔴 Live Threats Stream</h2>
+                <div id="alerts-container" class="space-y-4 h-[75vh] overflow-y-auto pr-2 custom-scrollbar"></div>
+            </div>
+
+            <div class="col-span-1 bg-gray-800 border border-gray-700 rounded-lg p-4 flex flex-col h-[75vh]">
+                <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
+                    <h2 class="text-xl font-semibold text-red-400">🚫 Blacklisted IPs</h2>
+                    <button onclick="fetchBannedIps()" class="text-gray-400 hover:text-white transition" title="Làm mới danh sách">🔄</button>
+                </div>
+                
+                <div id="banned-list" class="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+                    <p class="text-gray-500 text-sm text-center mt-4">Đang tải danh sách...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ======= CẤU HÌNH API =======
+        const WS_URL = "ws://mainIpServer:8000/ws/alerts";
+        const API_URL = "http://mainIpServer:8001/api"; 
+
+        let autoBanEnabled = false;
+
+        // ======= QUẢN LÝ TẮT/BẬT AUTO-BAN =======
+        async function fetchAutoBanStatus() {
+            try {
+                const res = await axios.get(`${API_URL}/autoban/status`);
+                autoBanEnabled = res.data.enabled;
+                updateAutoBanUI();
+            } catch (error) {
+                console.error("Lỗi lấy trạng thái Auto-ban:", error);
+            }
+        }
+
+        async function toggleAutoBan() {
+            try {
+                const newState = !autoBanEnabled;
+                await axios.post(`${API_URL}/autoban/toggle`, { enabled: newState });
+                autoBanEnabled = newState;
+                updateAutoBanUI();
+            } catch (error) {
+                alert("Lỗi kết nối khi thay đổi trạng thái Auto-ban!");
+            }
+        }
+
+        function updateAutoBanUI() {
+            const toggleBtn = document.getElementById("autoban-toggle");
+            const dot = document.getElementById("autoban-dot");
+            if (autoBanEnabled) {
+                toggleBtn.classList.replace("bg-gray-600", "bg-red-500");
+                dot.classList.replace("translate-x-0", "translate-x-6");
+            } else {
+                toggleBtn.classList.replace("bg-red-500", "bg-gray-600");
+                dot.classList.replace("translate-x-6", "translate-x-0");
+            }
+        }
+
+        // ======= WEBSOCKET CHO LOGS =======
+        const ws = new WebSocket(WS_URL);
+        const statusDot = document.getElementById("status-dot"); 
+        const statusText = document.getElementById("status-text");
+
+        ws.onopen = function() {
+            statusDot.classList.replace("bg-red-500", "bg-green-500");
+            statusDot.classList.add("animate-pulse");
+            statusText.innerText = "Live Stream Connected";
+            fetchBannedIps(); 
+            fetchAutoBanStatus();
+        };
+
+        ws.onclose = function() {
+            statusDot.classList.replace("bg-green-500", "bg-red-500");
+            statusDot.classList.remove("animate-pulse");
+            statusText.innerText = "Connection Lost!";
+        };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const container = document.getElementById("alerts-container");
+            const targetIp = data.target_ip || "Unknown";
+
+            const alertCard = document.createElement("div");
+            alertCard.className = "bg-gray-800 border-l-4 border-red-500 p-4 rounded-md shadow-md";
+            
+            alertCard.innerHTML = `
+                <div class="flex justify-between items-start mb-2">
+                    <span class="bg-red-900/50 text-red-400 text-xs font-bold px-2 py-1 rounded border border-red-700 uppercase tracking-wider">${data.level}</span>
+                    <span class="text-gray-500 text-xs font-mono">${data.time}</span>
+                </div>
+                <h3 class="text-lg font-bold text-white mb-2">${data.type}</h3>
+                
+                <div class="grid grid-cols-2 gap-2 bg-gray-900/50 p-2 rounded mb-3 text-sm border border-gray-700">
+                    <div>
+                        <span class="text-gray-500">Mục tiêu (Server):</span><br>
+                        <span class="text-blue-400 font-mono">${targetIp}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">Kẻ tấn công (IP):</span><br>
+                        <span class="text-yellow-400 font-mono font-bold">${data.ip}</span>
+                    </div>
+                </div>
+
+                <div class="bg-black/30 p-3 rounded mb-3 border border-gray-700">
+                    <p class="text-gray-300 font-mono text-sm">> ${data.analysis}</p>
+                </div>
+
+                <div class="flex justify-end">
+                    <button onclick="manualBan('${data.ip}', 'Manual Block from Alert', '${targetIp}')" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-1 px-3 rounded transition-colors flex items-center">
+                        🔒 Chặn IP Này trên Server ${targetIp}
+                    </button>
+                </div>
+            `;
+            container.prepend(alertCard);
+            
+            if (container.children.length > 100) {
+                container.removeChild(container.lastChild);
+            }
+        };
+
+        // ======= TƯƠNG TÁC API BAN/UNBAN =======
+        async function fetchBannedIps() {
+            try {
+                const res = await axios.get(`${API_URL}/banned_ips`);
+                const listContainer = document.getElementById("banned-list");
+                listContainer.innerHTML = "";
+                
+                const ips = res.data.banned;
+                if(ips.length === 0) {
+                    listContainer.innerHTML = `<p class="text-gray-500 text-sm text-center mt-4">Chưa có IP nào bị khóa.</p>`;
+                    return;
+                }
+
+                ips.forEach(item => {
+                    listContainer.innerHTML += `
+                        <div class="bg-gray-900 p-3 rounded border border-gray-700 flex justify-between items-center group">
+                            <div>
+                                <div class="text-yellow-400 font-mono text-sm font-bold">${item.ip}</div>
+                                <div class="text-blue-400 font-mono text-xs">SV: ${item.target_server || 'Unknown'}</div>
+                                <div class="text-gray-500 text-xs truncate max-w-[150px]" title="${item.reason}">${item.reason}</div>
+                            </div>
+                            <button onclick="manualUnban('${item.ip}', '${item.target_server}')" class="text-gray-400 hover:text-green-400 p-1 bg-gray-800 rounded opacity-0 group-hover:opacity-100 transition-all" title="Bỏ cấm IP này">
+                                🔓
+                            </button>
+                        </div>
+                    `;
+                });
+            } catch (error) {
+                console.error("Lỗi lấy danh sách ban:", error);
+            }
+        }
+
+        async function manualBan(ip, reason, targetServerIp) {
+            if(!confirm(`Bạn có chắc chắn muốn khóa IP: ${ip} trên Server ${targetServerIp}?`)) return;
+            try {
+                const response = await axios.post(`${API_URL}/ban`, { 
+                    ip: ip, 
+                    reason: reason,
+                    target_server_ip: targetServerIp 
+                });
+                console.log(response.data.message);
+                setTimeout(fetchBannedIps, 1500); 
+            } catch (err) {
+                alert("Lỗi kết nối tới Logic Engine khi khóa IP!");
+            }
+        }
+
+        async function manualUnban(ip, targetServerIp) {
+            if(!confirm(`Bạn muốn MỞ KHÓA cho IP: ${ip} trên Server ${targetServerIp}?`)) return;
+            try {
+                const response = await axios.post(`${API_URL}/unban`, { 
+                    ip: ip,
+                    target_server_ip: targetServerIp
+                });
+                console.log(response.data.message);
+                setTimeout(fetchBannedIps, 1500); 
+            } catch (err) {
+                alert("Lỗi kết nối tới Logic Engine khi mở khóa IP!");
+            }
+        }
+
+        setInterval(fetchBannedIps, 10000);
+    </script>
+    
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+    </style>
+</body>
+</html>
