@@ -65,7 +65,7 @@ men-men-soc-saas/
 ---
 
 ## 🚀 Hướng Dẫn Triển Khai (Deployment)
-cai_dat.md
+Xem chi tiết tại đây: [Hướng dẫn cài đặt chi tiết](cai_dat.md)
 
 ---
 
