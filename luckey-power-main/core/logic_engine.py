@@ -62,22 +62,25 @@ def extract_target_ip(log_data):
         host_ips = host_info.get("ip", [])
         if not host_ips: return "Unknown"
         if isinstance(host_ips, str): host_ips = [host_ips]
+        
+        fallback_ip = None
             
         for ip in host_ips:
             ip = str(ip).strip()
             if ":" in ip: continue 
-            if ip.startswith(("10.", "172.16.", "172.17.", "172.18.", "172.19.", 
-                               "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", 
-                               "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", 
-                               "172.30.", "172.31.", "192.168.", "127.")):
-                continue
-            return ip 
-            
-        for ip in host_ips:
-            ip = str(ip).strip()
-            if ":" not in ip: return ip
+            is_private = ip.startswith((
+                "10.", "192.168.", "127.",
+                "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", 
+                "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", 
+                "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31."
+            ))
+            if not is_private:
+                return ip
+            else:
+                if fallback_ip is None:
+                    fallback_ip = ip
                 
-        return "Unknown"
+        return fallback_ip if fallback_ip else "Unknown"
     except Exception as e:
         return "Unknown"
 
