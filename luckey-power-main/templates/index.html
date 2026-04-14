@@ -1,4 +1,3 @@
-cat << 'EOF' > index.html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9,6 +8,9 @@ cat << 'EOF' > index.html
     <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
 </head>
 <body class="bg-gray-900 text-white p-6 font-sans min-h-screen">
+    <button onclick="logout()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors text-sm">
+                    🚪 Đăng xuất
+    </button>
     <div class="max-w-7xl mx-auto">
         <div class="flex items-center justify-between mb-6 border-b border-gray-700 pb-4">
             <h1 class="text-3xl font-bold text-red-500 flex items-center">
@@ -25,7 +27,7 @@ cat << 'EOF' > index.html
 
                 <div class="flex items-center space-x-2 bg-gray-800 px-4 py-2 rounded-full border border-gray-700">
                     <span id="status-dot" class="w-3 h-3 rounded-full bg-red-500"></span>
-                    <span id="status-text" class="text-gray-300 text-sm">Chờ luồng Kafka...</span>
+                    <span id="status-text" class="text-gray-300 text-sm">Đang kết nối WebSocket...</span>
                 </div>
             </div>
         </div>
@@ -33,10 +35,10 @@ cat << 'EOF' > index.html
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div class="col-span-2 space-y-4">
                 <h2 class="text-xl font-semibold text-gray-300 mb-2 border-b border-gray-700 pb-2">🔴 Live Threats Stream</h2>
-                <div id="alerts-container" class="space-y-4 h-[75vh] overflow-y-auto pr-2 custom-scrollbar"></div>
+                <div id="alerts-container" class="space-y-4 h-[55vh] overflow-y-auto pr-2 custom-scrollbar"></div>
             </div>
 
-            <div class="col-span-1 bg-gray-800 border border-gray-700 rounded-lg p-4 flex flex-col h-[75vh]">
+            <div class="col-span-1 bg-gray-800 border border-gray-700 rounded-lg p-4 flex flex-col h-[55vh]">
                 <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
                     <h2 class="text-xl font-semibold text-red-400">🚫 Blacklisted IPs</h2>
                     <button onclick="fetchBannedIps()" class="text-gray-400 hover:text-white transition" title="Làm mới danh sách">🔄</button>
@@ -47,19 +49,81 @@ cat << 'EOF' > index.html
                 </div>
             </div>
         </div>
+
+        <div class="mt-6 bg-gray-800 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center bg-gray-800">
+                <h2 class="text-xl font-bold text-blue-400 flex items-center">
+                    <span class="mr-2">📊</span> Raw Logs Stream
+                </h2>
+                <span class="text-xs text-gray-400">Tự động làm mới mỗi 3 giây</span>
+            </div>
+            
+            <div class="overflow-x-auto max-h-80 custom-scrollbar">
+                <table class="w-full text-left text-sm text-gray-300">
+                    <thead class="text-xs uppercase bg-gray-700 text-gray-400 sticky top-0">
+                        <tr>
+                            <th scope="col" class="px-6 py-3">Thời gian</th>
+                            <th scope="col" class="px-6 py-3">IP Kẻ Tấn Công</th>
+                            <th scope="col" class="px-6 py-3">Log Type</th>
+                            <th scope="col" class="px-6 py-3">Action</th>
+                            <th scope="col" class="px-6 py-3">Username</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logs-table-body">
+                        <tr>
+                            <td colspan="5" class="px-6 py-4 text-center text-gray-500 italic">Đang tải dữ liệu từ kho ClickHouse...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
     </div>
 
-    <script>
-        // ======= CẤU HÌNH API =======
-        const WS_URL = "ws://mainIpServer:8000/ws/alerts";
-        const API_URL = "http://mainIpServer:8001/api"; 
+<script>
+        const token = localStorage.getItem('soc_token');
+        if (!token) {
+            window.location.href = '/login';
+        }
+
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+        axios.interceptors.response.use(
+            function (response) {
+                return response;
+            }, 
+            function (error) {
+                // Nếu server trả về lỗi 401 (Chưa xác thực / Token hết hạn)
+                if (error.response && error.response.status === 401) {
+                    console.warn("⚠️ Token đã hết hạn. Đang tự động đăng xuất...");
+                    
+                    alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!"); 
+                    
+                    logout();
+                }
+                return Promise.reject(error);
+            }
+        );
+
+        // 3. Hàm Đăng xuất
+        function logout() {
+            localStorage.removeItem('soc_token');
+            window.location.href = '/login';
+        }
+        // CẤU HÌNH MẠNG
+        const HOST = window.location.hostname; 
+        const WEB_BACKEND_PORT = 8000;
+        const LOGIC_ENGINE_PORT = 8001;
+
+        const WS_URL = `ws://${HOST}:${WEB_BACKEND_PORT}/ws/alerts`;
+        const BACKEND_API_URL = `http://${HOST}:${WEB_BACKEND_PORT}/api`; 
+        const LOGIC_API_URL = `http://${HOST}:${LOGIC_ENGINE_PORT}/api`; 
 
         let autoBanEnabled = false;
 
-        // ======= QUẢN LÝ TẮT/BẬT AUTO-BAN =======
         async function fetchAutoBanStatus() {
             try {
-                const res = await axios.get(`${API_URL}/autoban/status`);
+                const res = await axios.get(`${LOGIC_API_URL}/autoban/status`);
                 autoBanEnabled = res.data.enabled;
                 updateAutoBanUI();
             } catch (error) {
@@ -70,11 +134,11 @@ cat << 'EOF' > index.html
         async function toggleAutoBan() {
             try {
                 const newState = !autoBanEnabled;
-                await axios.post(`${API_URL}/autoban/toggle`, { enabled: newState });
+                await axios.post(`${LOGIC_API_URL}/autoban/toggle`, { enabled: newState });
                 autoBanEnabled = newState;
                 updateAutoBanUI();
             } catch (error) {
-                alert("Lỗi kết nối khi thay đổi trạng thái Auto-ban!");
+                alert("Lỗi kết nối tới Logic Engine khi thay đổi trạng thái Auto-ban!");
             }
         }
 
@@ -90,83 +154,93 @@ cat << 'EOF' > index.html
             }
         }
 
-        // ======= WEBSOCKET CHO LOGS =======
-        const ws = new WebSocket(WS_URL);
+        let ws;
         const statusDot = document.getElementById("status-dot"); 
         const statusText = document.getElementById("status-text");
 
-        ws.onopen = function() {
-            statusDot.classList.replace("bg-red-500", "bg-green-500");
-            statusDot.classList.add("animate-pulse");
-            statusText.innerText = "Live Stream Connected";
-            fetchBannedIps(); 
-            fetchAutoBanStatus();
-        };
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
 
-        ws.onclose = function() {
-            statusDot.classList.replace("bg-green-500", "bg-red-500");
-            statusDot.classList.remove("animate-pulse");
-            statusText.innerText = "Connection Lost!";
-        };
+            ws.onopen = function() {
+                statusDot.classList.replace("bg-red-500", "bg-green-500");
+                statusDot.classList.add("animate-pulse");
+                statusText.innerText = "Live Stream Connected";
+                fetchBannedIps(); 
+                fetchAutoBanStatus();
+                fetchLogs(); // [MỚI] Lấy log ngay khi kết nối
+            };
 
-        ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            const container = document.getElementById("alerts-container");
-            const targetIp = data.target_ip || "Unknown";
+            ws.onclose = function() {
+                statusDot.classList.replace("bg-green-500", "bg-red-500");
+                statusDot.classList.remove("animate-pulse");
+                statusText.innerText = "Connection Lost! Đang thử lại...";
+                setTimeout(connectWebSocket, 3000); 
+            };
 
-            const alertCard = document.createElement("div");
-            alertCard.className = "bg-gray-800 border-l-4 border-red-500 p-4 rounded-md shadow-md";
-            
-            alertCard.innerHTML = `
-                <div class="flex justify-between items-start mb-2">
-                    <span class="bg-red-900/50 text-red-400 text-xs font-bold px-2 py-1 rounded border border-red-700 uppercase tracking-wider">${data.level}</span>
-                    <span class="text-gray-500 text-xs font-mono">${data.time}</span>
-                </div>
-                <h3 class="text-lg font-bold text-white mb-2">${data.type}</h3>
+            ws.onerror = function() {
+                ws.close(); 
+            };
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                const container = document.getElementById("alerts-container");
+                const targetIp = data.target_server || data.target_ip || "Unknown";
+
+                const alertCard = document.createElement("div");
+                alertCard.className = "bg-gray-800 border-l-4 border-red-500 p-4 rounded-md shadow-md";
                 
-                <div class="grid grid-cols-2 gap-2 bg-gray-900/50 p-2 rounded mb-3 text-sm border border-gray-700">
-                    <div>
-                        <span class="text-gray-500">Mục tiêu (Server):</span><br>
-                        <span class="text-blue-400 font-mono">${targetIp}</span>
+                alertCard.innerHTML = `
+                    <div class="flex justify-between items-start mb-2">
+                        <span class="bg-red-900/50 text-red-400 text-xs font-bold px-2 py-1 rounded border border-red-700 uppercase tracking-wider">${data.level}</span>
+                        <span class="text-gray-500 text-xs font-mono">${data.time}</span>
                     </div>
-                    <div>
-                        <span class="text-gray-500">Kẻ tấn công (IP):</span><br>
-                        <span class="text-yellow-400 font-mono font-bold">${data.ip}</span>
+                    <h3 class="text-lg font-bold text-white mb-2">${data.type}</h3>
+                    
+                    <div class="grid grid-cols-2 gap-2 bg-gray-900/50 p-2 rounded mb-3 text-sm border border-gray-700">
+                        <div>
+                            <span class="text-gray-500">Mục tiêu (Server):</span><br>
+                            <span class="text-blue-400 font-mono">${targetIp}</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-500">Kẻ tấn công (IP):</span><br>
+                            <span class="text-yellow-400 font-mono font-bold">${data.ip}</span>
+                        </div>
                     </div>
-                </div>
 
-                <div class="bg-black/30 p-3 rounded mb-3 border border-gray-700">
-                    <p class="text-gray-300 font-mono text-sm">> ${data.analysis}</p>
-                </div>
+                    <div class="bg-black/30 p-3 rounded mb-3 border border-gray-700">
+                        <p class="text-gray-300 font-mono text-sm">> ${data.analysis}</p>
+                    </div>
 
-                <div class="flex justify-end">
-                    <button onclick="manualBan('${data.ip}', 'Manual Block from Alert', '${targetIp}')" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-1 px-3 rounded transition-colors flex items-center">
-                        🔒 Chặn IP Này trên Server ${targetIp}
-                    </button>
-                </div>
-            `;
-            container.prepend(alertCard);
-            
-            if (container.children.length > 100) {
-                container.removeChild(container.lastChild);
-            }
-        };
+                    <div class="flex justify-end">
+                        <button onclick="manualBan('${data.ip}', 'Manual Block from Alert', '${targetIp}')" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-1 px-3 rounded transition-colors flex items-center">
+                            🔒 Chặn IP Này trên Server ${targetIp}
+                        </button>
+                    </div>
+                `;
+                container.prepend(alertCard);
+                
+                if (container.children.length > 100) {
+                    container.removeChild(container.lastChild);
+                }
+            };
+        }
 
-        // ======= TƯƠNG TÁC API BAN/UNBAN =======
+        connectWebSocket();
+
         async function fetchBannedIps() {
             try {
-                const res = await axios.get(`${API_URL}/banned_ips`);
+                const res = await axios.get(`${LOGIC_API_URL}/banned_ips`);
                 const listContainer = document.getElementById("banned-list");
-                listContainer.innerHTML = "";
                 
                 const ips = res.data.banned;
-                if(ips.length === 0) {
+                if(!ips || ips.length === 0) {
                     listContainer.innerHTML = `<p class="text-gray-500 text-sm text-center mt-4">Chưa có IP nào bị khóa.</p>`;
                     return;
                 }
 
+                let htmlContent = "";
                 ips.forEach(item => {
-                    listContainer.innerHTML += `
+                    htmlContent += `
                         <div class="bg-gray-900 p-3 rounded border border-gray-700 flex justify-between items-center group">
                             <div>
                                 <div class="text-yellow-400 font-mono text-sm font-bold">${item.ip}</div>
@@ -179,21 +253,24 @@ cat << 'EOF' > index.html
                         </div>
                     `;
                 });
+                listContainer.innerHTML = htmlContent;
+
             } catch (error) {
                 console.error("Lỗi lấy danh sách ban:", error);
+                document.getElementById("banned-list").innerHTML = `<p class="text-red-500 text-sm text-center mt-4">Lỗi kết nối tới Server</p>`;
             }
         }
 
         async function manualBan(ip, reason, targetServerIp) {
             if(!confirm(`Bạn có chắc chắn muốn khóa IP: ${ip} trên Server ${targetServerIp}?`)) return;
             try {
-                const response = await axios.post(`${API_URL}/ban`, { 
+                const response = await axios.post(`${LOGIC_API_URL}/ban`, { 
                     ip: ip, 
                     reason: reason,
                     target_server_ip: targetServerIp 
                 });
                 console.log(response.data.message);
-                setTimeout(fetchBannedIps, 1500); 
+                setTimeout(fetchBannedIps, 500); 
             } catch (err) {
                 alert("Lỗi kết nối tới Logic Engine khi khóa IP!");
             }
@@ -202,18 +279,67 @@ cat << 'EOF' > index.html
         async function manualUnban(ip, targetServerIp) {
             if(!confirm(`Bạn muốn MỞ KHÓA cho IP: ${ip} trên Server ${targetServerIp}?`)) return;
             try {
-                const response = await axios.post(`${API_URL}/unban`, { 
+                // ĐÃ SỬA: API_URL thành LOGIC_API_URL
+                const response = await axios.post(`${LOGIC_API_URL}/unban`, { 
                     ip: ip,
                     target_server_ip: targetServerIp
                 });
                 console.log(response.data.message);
-                setTimeout(fetchBannedIps, 1500); 
+                setTimeout(fetchBannedIps, 500); 
             } catch (err) {
                 alert("Lỗi kết nối tới Logic Engine khi mở khóa IP!");
             }
         }
 
+        // ==========================================
+        // [MỚI THÊM] HÀM FETCH LOG TỪ CLICKHOUSE
+        // ==========================================
+        async function fetchLogs() {
+            try {
+                const response = await axios.get(`${BACKEND_API_URL}/logs?limit=50`); 
+                const tbody = document.getElementById('logs-table-body');
+                
+                // 1. XỬ LÝ NẾU BACKEND TRẢ VỀ LỖI DATABASE
+                if (response.data.error) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-4 text-center text-red-500 font-bold">⚠️ Lỗi từ Backend: ${response.data.error}</td></tr>`;
+                    return;
+                }
+
+                const logs = response.data.logs;
+                if (!logs || logs.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-4 text-center text-gray-500">Chưa có dữ liệu log.</td></tr>`;
+                    return;
+                }
+
+                // Nếu có data thì render bình thường
+                tbody.innerHTML = ''; 
+                logs.forEach(log => {
+                    // Đảm bảo log.action luôn là chuỗi trước khi dùng .includes()
+                    const actionText = log.action || ''; 
+                    const actionColor = actionText.includes('Blocked') ? 'text-red-500 font-bold' : 'text-green-400';
+
+                    const row = `
+                        <tr class="border-b border-gray-800 hover:bg-gray-800 transition-colors">
+                            <td class="px-6 py-3 font-mono text-xs text-gray-400">${log.timestamp || 'N/A'}</td>
+                            <td class="px-6 py-3 font-bold text-red-400">${log.target_ip || '-'}</td>
+                            <td class="px-6 py-3">${log.log_type || 'N/A'}</td>
+                            <td class="px-6 py-3 ${actionColor}">${log.action || 'Unknown'}</td>
+                            <td class="px-6 py-3 font-mono text-blue-300">${log.username || '-'}</td>
+                        </tr>
+                    `;
+                    tbody.innerHTML += row;
+                });
+            } catch (err) {
+                // 2. XỬ LÝ NẾU BACKEND BỊ SẬP (MẤT KẾT NỐI)
+                console.error("Lỗi khi tải log:", err);
+                const tbody = document.getElementById('logs-table-body');
+                tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-4 text-center text-red-500 font-bold">❌ Mất kết nối tới Backend (Port 8000)</td></tr>`;
+            }
+        }
+
+        // Auto-refresh loops
         setInterval(fetchBannedIps, 10000);
+        setInterval(fetchLogs, 3000); // Làm mới bảng log mỗi 3 giây
     </script>
     
     <style>
